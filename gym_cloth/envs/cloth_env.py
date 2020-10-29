@@ -32,9 +32,6 @@ import scipy
 from scipy.spatial import ConvexHull
 from skimage.measure import compare_ssim
 from vismpc.cost_functions import L2
-#from vismpc.vae import vae
-#VAEmodel = vae.load_model('vismpc/vae/models/rgbd_32.pth')
-#VAEmodel.eval()
 
 _logging_setup_table = {
     "debug": logging.DEBUG,
@@ -113,19 +110,19 @@ class ClothEnv(gym.Env):
         self._obs_type        = cfg['env']['obs_type']
         self._force_grab      = cfg['env']['force_grab']
         self._oracle_reveal   = cfg['env']['oracle_reveal']
-        self._use_depth       = cfg['env']['use_depth']
-        self._use_rgbd        = cfg['env']['use_rgbd']
+        self._small_deltas    = cfg['env']['small_deltas']
+        self._skip_frames    = cfg['env']['skip_frames']
+        self._intermediary_frames = cfg['env']['intermediary_frames']
+
         if cfg['env']['goal_img']:
             self.goal_img = pickle.load(open(cfg['env']['goal_img'], 'rb'))
-            if self._use_rgbd == 'False':
-                self.goal_img = self.goal_img[:,:,:3]
+            self.goal_img = self.goal_img[:,:,:3]
         else:
             self.goal_img = None
         if cfg['env']['goal_demo']:
             self.goal_demo = pickle.load(open(cfg['env']['goal_demo'], 'rb'))
             self.goal_demo = np.array(self.goal_demo)
-            if self._use_rgbd == 'False':
-                self.goal_demo = self.goal_demo[:,:,:,:3]
+            self.goal_demo = self.goal_demo[:,:,:,:3]
             self.goal_demo_idx = 0 # subgoal index in demonstration
             self.goal_demo_stride = 1 # how far apart to sample demonstration
         self._radius_inc      = 0.02
@@ -185,9 +182,14 @@ class ClothEnv(gym.Env):
         if self._clip_act_space:
             # Applies regardless of 'delta actions' vs non deltas.  Note misleading
             # 'clip' name, because (0,1) x/y-coords are *expanded* to (-1,1).
+            
+            max_delta = 0.7
+            if self._small_deltas:  # simpler/longer episodes for causal learning
+                max_delta = 0.3
+
             self.action_space = spaces.Box(
-                low= np.array([-1., -1., -0.7, -0.7]),
-                high=np.array([ 1.,  1.,  0.7,  0.7]) # Ryan: decrease dx/dy range to increase random policy mean episode length (definitely tuneable)
+                low= np.array([-1., -1., -max_delta, -max_delta]),
+                high=np.array([ 1.,  1.,  max_delta,  max_delta]) # Ryan: decrease dx/dy range to increase random policy mean episode length (definitely tuneable)
             )
         else:
             if self._delta_actions:
@@ -219,17 +221,13 @@ class ClothEnv(gym.Env):
             for pt in self.cloth.pts:
                 lst.extend([pt.x, pt.y, pt.z])
             return np.array(lst)
-        elif self._obs_type == 'blender': # Ryan: implement RGBD
-            if self._use_rgbd == 'True':
-                img_rgb = self.get_blender_rep('False')
-                img_d = self.get_blender_rep('True')[:,:,0]
-                return np.dstack((img_rgb, img_d))
-            else:
-                return self.get_blender_rep(self._use_depth)
+        elif self._obs_type == 'blender':
+            img_rgb = self.get_blender_rep()
+            return img_rgb
         else:
             raise ValueError(self._obs_type)
 
-    def get_blender_rep(self, use_depth):
+    def get_blender_rep(self):
         """Ryan: put get_blender_rep in its own method so we can easily get RGBD images."""
 
         bhead = '/tmp/blender'
@@ -280,7 +278,7 @@ class ClothEnv(gym.Env):
                 '/Applications/Blender/blender.app/Contents/MacOS/blender',
                 '--background', '--python', bfile, '--', tm_path,
                 str(self._hd), str(self._wd), str(init_side), self._init_type,
-                frame_path, self._oracle_reveal, use_depth, floor_path,
+                frame_path, self._oracle_reveal, 'False', floor_path,
                 self.__add_dom_rand, ",".join([str(i) for i in self.dom_rand_params['c']]),
                 ",".join([str(i) for i in self.dom_rand_params['n1']]),
                 ",".join([str(i) for i in self.dom_rand_params['camera_pos']]),
@@ -291,14 +289,13 @@ class ClothEnv(gym.Env):
             subprocess.call([
                 'blender', '--background', '--python', bfile, '--', tm_path,
                 str(self._hd), str(self._wd), str(init_side), self._init_type,
-                frame_path, self._oracle_reveal, use_depth, floor_path,
+                frame_path, self._oracle_reveal, 'False', floor_path,
                 self.__add_dom_rand, ",".join([str(i) for i in self.dom_rand_params['c']]),
                 ",".join([str(i) for i in self.dom_rand_params['n1']]),
                 ",".join([str(i) for i in self.dom_rand_params['camera_pos']]),
                 ",".join([str(i) for i in self.dom_rand_params['camera_deg']]),
                 str(self.dom_rand_params['specular_max'])]
             )
-        time.sleep(1)  # Wait a bit just in case
 
         # Step 3: load image from directory saved by blender.
         #Adi: Loading the occlusion state as well and saving it
@@ -314,17 +311,9 @@ class ClothEnv(gym.Env):
 
         # If depth: smooth the edges (b/c of some triangles) regardless of DR.
         # Also, darken image. For color, default gamma (1.0) is fine for no DR.
-        if use_depth == 'True':
-            img = cv2.bilateralFilter(img, 7, 50, 50)
-            if self._add_dom_rand:
-               gval = self.dom_rand_params['gval_depth']
-               img = np.uint8(np.maximum(0, np.double(img) - gval))
-            else:
-               img = np.uint8(np.maximum(0, np.double(img) - 50))
-        else:
-            if self._add_dom_rand:
-                gval = self.dom_rand_params['gval_rgb']
-                img = self._adjust_gamma(img, gamma=gval)
+        if self._add_dom_rand:
+            gval = self.dom_rand_params['gval_rgb']
+            img = self._adjust_gamma(img, gamma=gval)
 
         if self._add_dom_rand:
             # Apply uniform noise ONLY AT THE END OF EVERYTHING.
@@ -467,14 +456,8 @@ class ClothEnv(gym.Env):
         # Number of iterations for each stage of the action. Actually, the
         # iteration for the pull can be computed here ahead of time.
         if self._delta_actions:
-            ii = 0
-            current_l = 0
-            while True:
-                current_l += np.sqrt( (x_dir_r)**2 + (y_dir_r)**2 )
-                if current_l >= total_length:
-                    break
-                ii += 1
-            iters_pull = ii
+            delta_diag = np.sqrt(x_dir_r**2 + y_dir_r**2)
+            iters_pull = int(total_length / delta_diag)
         else:
             iters_pull = int(self.iters_pull_max * length)
 
@@ -502,9 +485,20 @@ class ClothEnv(gym.Env):
             iterations = 0
 
         i = 0
+        
+        inter_obs = [] # intermediary observations
+
         while i < iterations:
             self._pull(i, iters_pull, x_dir_r, y_dir_r)
             self.cloth.update()
+
+            # Save intermediary frame for training causal model on video
+            # not taking frames after release, as these typically have little motion
+            max_iteration_for_interm_frame = self.iters_up + self.iters_up_rest + iters_pull + self.iters_grip_rest
+            if self._intermediary_frames and (i < max_iteration_for_interm_frame) and (i % (self._skip_frames+1) == 0):
+                logger.debug(f"iteration {i}")
+                inter_obs.append(self.state) # TODO: render all frames in one blender session
+
             if not initialize:
                 self.num_sim_steps += 1
 
@@ -525,6 +519,7 @@ class ClothEnv(gym.Env):
 
         if initialize:
             return
+
         self.num_steps += 1
         curr_state = self.state
         rew  = self._reward(action, exit_early, curr_state)
@@ -541,7 +536,12 @@ class ClothEnv(gym.Env):
             'have_tear': self.have_tear,
             'out_of_bounds': self._out_of_bounds(),
         }
-        return curr_state, rew, term, info
+
+        if self._intermediary_frames: # return video of the action
+            # Todo: think if blender rending is faster than .state or not, and why.
+            return inter_obs, curr_state, rew, term, info # keeping inter_obs and curr_state separate as skip frames may lead to incoherent time delta
+        else:
+            return curr_state, rew, term, info
 
     def _reward(self, action, exit_early, state):
         """Reward function.
@@ -790,6 +790,22 @@ class ClothEnv(gym.Env):
         assert cloth.bounds[0] == self.bounds[0]
         assert cloth.bounds[1] == self.bounds[1]
         assert cloth.bounds[2] == self.bounds[2]
+
+
+        # We shouldn't need to wrap around np.array(...) as self.state does that.
+        # Ryan: compute dom rand params once per episode
+        self.dom_rand_params['gval_depth'] = self.np_random.uniform(low=40, high=50)
+        self.dom_rand_params['gval_rgb'] = self.np_random.uniform(low=0.7, high=1.3)
+        lim = self.np_random.uniform(low=-15.0, high=15.0)
+        if self._obs_type == 'blender':
+            self.dom_rand_params['noise'] = self.np_random.uniform(low=-lim, high=lim, size=(self._wd, self._hd, 3))
+        self.dom_rand_params['c'] = np.random.uniform(low=0.4, high=0.6, size=(3,))
+        self.dom_rand_params['n1'] = np.random.uniform(low=-0.35, high=0.35, size=(3,))
+        self.dom_rand_params['camera_pos'] = np.random.normal(0., scale=0.04, size=(3,)) # check get_image_rep_279.py for 'scale'
+        self.dom_rand_params['camera_deg'] = np.random.normal(0., scale=0.90, size=(3,))
+        self.dom_rand_params['specular_max'] = np.random.uniform(low=0.0, high=0.0) # check get_image_rep_279.py for 'high'
+    
+
         self.gripper = gripper = Gripper(cloth, self.grip_radius,
                 self.cfg['cloth']['height'], self.cfg['cloth']['thickness'])
         self.num_steps = 0
@@ -822,18 +838,6 @@ class ClothEnv(gym.Env):
         self._start_coverage = self._prev_reward
         self._start_variance_inv = self._compute_variance()
 
-        # We shouldn't need to wrap around np.array(...) as self.state does that.
-        # Ryan: compute dom rand params once per episode
-        self.dom_rand_params['gval_depth'] = self.np_random.uniform(low=40, high=50)
-        self.dom_rand_params['gval_rgb'] = self.np_random.uniform(low=0.7, high=1.3)
-        lim = self.np_random.uniform(low=-15.0, high=15.0)
-        if self._obs_type == 'blender':
-            self.dom_rand_params['noise'] = self.np_random.uniform(low=-lim, high=lim, size=(self._wd, self._hd, 3))
-        self.dom_rand_params['c'] = np.random.uniform(low=0.4, high=0.6, size=(3,))
-        self.dom_rand_params['n1'] = np.random.uniform(low=-0.35, high=0.35, size=(3,))
-        self.dom_rand_params['camera_pos'] = np.random.normal(0., scale=0.04, size=(3,)) # check get_image_rep_279.py for 'scale'
-        self.dom_rand_params['camera_deg'] = np.random.normal(0., scale=0.90, size=(3,))
-        self.dom_rand_params['specular_max'] = np.random.uniform(low=0.0, high=0.0) # check get_image_rep_279.py for 'high'
         obs = self.state
         return obs
 

@@ -31,7 +31,7 @@ simulation_steps: 30        # Actually an important hyperparameter to match with
 # ------------------------------------------------------------------------------
 
 env:
-    max_actions: 15         # Max number of actions per episode. This should be on the order of 5 to 50.
+    max_actions: 1        # Max number of actions per episode. This should be on the order of 5 to 50.
     max_z_threshold: 5      # For now, we get high reward if all points are below this threshold (should fix)
     iters_up: 50            # For pulling cloth upwards (only z changes)
     iters_up_rest: 80       # Resting after pulling cloth upwards.
@@ -45,12 +45,13 @@ env:
     force_grab: True       # Should ONLY be true for evaluation, never for training.
     clip_act_space: True    # Whether we assume our actions should be in [-1,1], might make it easier for RL
     delta_actions: True     # If True, our action for length/angle are deltas in x and y space.
+    small_deltas: True      # If True, deltas are clipped to range [-0.3, 0.3]. This helps generate longer/simpler episodes for learning the causal model.
+    intermediary_frames: True # Whether to save intermediary frames.
+    skip_frames: 15          # number of frames to skip between every recorded frame (small action iters due to reduce_factor).
     obs_type: 'blender'     # '1d' or 'blender'
     oracle_reveal: 'False'  # If 'True', we compute the occlusion vector every time Blender is called (should only be True if using corner revealing demonstrator)
-    use_depth: 'False'      # If 'True', we use depth images for the training process instead of color images
-    use_rgbd: 'True'        # If 'True', use both RGB and depth
     use_dom_rand: 'False'   
-    goal_img: 'vismpc/goal_imgs/smooth.pkl' # '' for no goal image, otherwise file path to .pkl goal image
+    goal_img: '' #'vismpc/goal_imgs/smooth.pkl' # '' for no goal image, otherwise file path to .pkl goal image
     goal_demo: '' # If non-empty, get subgoals from the demonstration in the given .pkl file.
     viz_vismpc: True # save images for inspection of vis dynamics and cost fns
 
@@ -63,7 +64,7 @@ env:
 # ------------------------------------------------------------------------------
 
 init:
-    type: 'tier0'               # Options: tier0, tier1, tier2, tier3
+    type: 'tier1'               # Options: tier0, tier1, tier2, tier3
     debug_matplotlib: False     # If we show matplotlib video of the initialization
     render_opengl: False        # If we show opengl rendering
 

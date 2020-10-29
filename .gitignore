@@ -22,6 +22,7 @@ dist/*
 *.log
 logs/
 data/
+render/
 *.prof
 *.pkl
 *.obj
