@@ -37,7 +37,7 @@ env:
     iters_up_rest: 80       # Resting after pulling cloth upwards.
     iters_pull_max: 400     # Max number to pull; actions take a fraction of this.
     iters_grip_rest: 300    # No-ops to let cloth settle while being gripped --- needed for realism
-    iters_rest: 1000        # No-ops to let the cloth rest (do larger to test if folds are stable...)
+    iters_rest: 300        # No-ops to let the cloth rest (do larger to test if folds are stable...)
     updates_per_move: 1     # Should really be 1, ignore this?
     reduce_factor: 0.0020   # Multiply raw directions by this to make actions smaller
     grip_radius: 0.003      # alternative: .003, larger radius means we grab more points
@@ -46,7 +46,7 @@ env:
     clip_act_space: True    # Whether we assume our actions should be in [-1,1], might make it easier for RL
     delta_actions: True     # If True, our action for length/angle are deltas in x and y space.
     small_deltas: True      # If True, deltas are clipped to range [-0.3, 0.3]. This helps generate longer/simpler episodes for learning the causal model.
-    intermediary_frames: False # Whether to save intermediary frames.
+    intermediary_frames: True # Whether to save intermediary frames.
     obs_type: 'blender'     # '1d' or 'blender'
     oracle_reveal: 'False'  # If 'True', we compute the occlusion vector every time Blender is called (should only be True if using corner revealing demonstrator)
     use_dom_rand: 'False'   
@@ -63,7 +63,7 @@ env:
 # ------------------------------------------------------------------------------
 
 init:
-    type: 'tier1'               # Options: tier0, tier1, tier2, tier3
+    type: 'tier0'               # Options: tier0, tier1, tier2, tier3
     debug_matplotlib: False     # If we show matplotlib video of the initialization
     render_opengl: False        # If we show opengl rendering
 

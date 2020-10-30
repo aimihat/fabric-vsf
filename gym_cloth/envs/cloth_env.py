@@ -33,6 +33,8 @@ from scipy.spatial import ConvexHull
 from skimage.measure import compare_ssim
 from vismpc.cost_functions import L2
 
+logging.getLogger("trimesh").setLevel(logging.WARNING)
+
 _logging_setup_table = {
     "debug": logging.DEBUG,
     "info": logging.INFO,
@@ -111,7 +113,6 @@ class ClothEnv(gym.Env):
         self._force_grab      = cfg['env']['force_grab']
         self._oracle_reveal   = cfg['env']['oracle_reveal']
         self._small_deltas    = cfg['env']['small_deltas']
-        self._skip_frames    = cfg['env']['skip_frames']
         self._intermediary_frames = cfg['env']['intermediary_frames']
 
         if cfg['env']['goal_img']:
@@ -130,7 +131,6 @@ class ClothEnv(gym.Env):
         self.render_proc      = None
         self.render_port      = 5556
         self._logger_idx      = subrank
-        self._occlusion_vec   = [True, True, True, True]
         self.__add_dom_rand   = cfg['env']['use_dom_rand']              # string
         self._add_dom_rand    = (self.__add_dom_rand.lower() == 'true') # boolean
         self.dom_rand_params  = {} # Ryan: store domain randomization params to keep constant per episode
@@ -222,8 +222,8 @@ class ClothEnv(gym.Env):
                 lst.extend([pt.x, pt.y, pt.z])
             return np.array(lst)
         elif self._obs_type == 'blender':
-            img_rgb = self.get_blender_rep()
-            return img_rgb
+            img_path = self.get_blender_rep()
+            return img_path
         else:
             raise ValueError(self._obs_type)
 
@@ -236,8 +236,7 @@ class ClothEnv(gym.Env):
 
         # Step 1: make obj file using trimesh, and save to directory.
         wh = self.num_w
-        #wh = self.num_h
-        assert self.num_w == self.num_h  # TODO for now
+        assert self.num_w == self.num_h
         cloth = np.array([[p.x, p.y, p.z] for p in self.cloth.pts])
         assert cloth.shape[1] == 3, cloth.shape
         faces = []
@@ -253,78 +252,60 @@ class ClothEnv(gym.Env):
         date = '{}'.format(datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
         base = 'gym-cloth-r{}-s{}-{}'.format(rank, step, date)
         tm_path = join(bhead, base)
-        randnum = np.random.randint(1000000)  # np.random instead of np_random :-)
+        randnum = np.random.randint(1000000)
         tm_path = '{}_r{}.obj'.format(tm_path, str(randnum).zfill(7))
         tm.export(tm_path)
 
+        return tm_path
+
+    def state_img(self, tm_path_list):
         # Step 2: call blender to get image representation.  We assume the
         # `blender` sub-package is at the same level as `envs`.  Use
         # __dirname__ to get path, then switch to `blender` dir.  Also deal
         # with data paths (for background frame) and different machines.
 
         init_side = 1 if self.cloth.init_side else -1
-        #bfile = join(os.path.dirname(__file__), '../blender/get_image_rep.py') # 2.80
         bfile = join(os.path.dirname(__file__), '../blender/get_image_rep_279.py')
         frame_path = pkg_resources.resource_filename('gym_cloth', 'blender/frame0.obj')
         floor_path = pkg_resources.resource_filename('gym_cloth', 'blender/floor.obj')
 
-        #Adi: Adding argument/flag for the oracle_reveal demonstrator
-        #Adi: Adding argument/flag for using depth images
-        #Adi: Adding argument for the floor obj path for more accurate depth images
-        #Adi: Adding flag for domain randomization
-        #Ryan: Adding hacky flags for fixed dom rand params per episode
-        if sys.platform == 'darwin':
-            subprocess.call([
-                '/Applications/Blender/blender.app/Contents/MacOS/blender',
-                '--background', '--python', bfile, '--', tm_path,
-                str(self._hd), str(self._wd), str(init_side), self._init_type,
-                frame_path, self._oracle_reveal, 'False', floor_path,
-                self.__add_dom_rand, ",".join([str(i) for i in self.dom_rand_params['c']]),
-                ",".join([str(i) for i in self.dom_rand_params['n1']]),
-                ",".join([str(i) for i in self.dom_rand_params['camera_pos']]),
-                ",".join([str(i) for i in self.dom_rand_params['camera_deg']]),
-                str(self.dom_rand_params['specular_max'])]
-            )
-        else:
-            subprocess.call([
-                'blender', '--background', '--python', bfile, '--', tm_path,
-                str(self._hd), str(self._wd), str(init_side), self._init_type,
-                frame_path, self._oracle_reveal, 'False', floor_path,
-                self.__add_dom_rand, ",".join([str(i) for i in self.dom_rand_params['c']]),
-                ",".join([str(i) for i in self.dom_rand_params['n1']]),
-                ",".join([str(i) for i in self.dom_rand_params['camera_pos']]),
-                ",".join([str(i) for i in self.dom_rand_params['camera_deg']]),
-                str(self.dom_rand_params['specular_max'])]
-            )
+        logging.debug('Calling blender to get image representation')
+        subprocess.call([
+            '/Applications/Blender/blender.app/Contents/MacOS/blender',
+            '--background', '--python', bfile, '--',
+            ",".join([str(i) for i in tm_path_list]),
+            str(self._hd), str(self._wd), str(init_side), self._init_type,
+            frame_path, floor_path,
+            self.__add_dom_rand, ",".join([str(i) for i in self.dom_rand_params['c']]),
+            ",".join([str(i) for i in self.dom_rand_params['n1']]),
+            ",".join([str(i) for i in self.dom_rand_params['camera_pos']]),
+            ",".join([str(i) for i in self.dom_rand_params['camera_deg']]),
+            str(self.dom_rand_params['specular_max']), "1> nul"]  # hide output 
+        )
 
         # Step 3: load image from directory saved by blender.
-        #Adi: Loading the occlusion state as well and saving it
-        blender_path = tm_path.replace('.obj','.png')
-        occlusion_path_pkl = tm_path.replace('.obj', '')
-        with open(occlusion_path_pkl, 'rb') as fp:
-            itemlist = pickle.load(fp)
-            self._occlusion_vec = itemlist
+        blender_paths = [i.replace('.obj','.png') for i in tm_path_list]
 
-        img = cv2.imread(blender_path)
-        assert img.shape == (self._hd, self._wd, 3), \
-                'error, shape {}, idx {}'.format(img.shape, self._logger_idx)
+        imgs = [cv2.imread(p) for p in blender_paths]
+        assert imgs[0].shape == (self._hd, self._wd, 3), \
+                'error, shape {}, idx {}'.format(imgs[0].shape, self._logger_idx)
 
         # If depth: smooth the edges (b/c of some triangles) regardless of DR.
         # Also, darken image. For color, default gamma (1.0) is fine for no DR.
         if self._add_dom_rand:
             gval = self.dom_rand_params['gval_rgb']
-            img = self._adjust_gamma(img, gamma=gval)
-
-        if self._add_dom_rand:
+            imgs = [self._adjust_gamma(img, gamma=gval) for img in imgs]
             # Apply uniform noise ONLY AT THE END OF EVERYTHING.
             noise = self.dom_rand_params['noise']
-            img = np.minimum( np.maximum(np.double(img)+noise, 0), 255 )
-            img = np.uint8(img)
+            imgs = [np.minimum( np.maximum(np.double(img)+noise, 0), 255 ) for img in imgs]
+            imgs = [np.uint8(img) for img in imgs]
 
         # Step 4: remaining book-keeping.
-        if os.path.isfile(tm_path):
-            os.remove(tm_path)
-        return img
+        for tm_path in tm_path_list:
+            if os.path.isfile(tm_path):
+                os.remove(tm_path)
+
+        return imgs
 
     def seed(self, seed=None):
         """Apply the env seed.
@@ -492,12 +473,8 @@ class ClothEnv(gym.Env):
             self._pull(i, iters_pull, x_dir_r, y_dir_r)
             self.cloth.update()
 
-            # Save intermediary frame for training causal model on video
-            # not taking frames after release, as these typically have little motion
-            max_iteration_for_interm_frame = self.iters_up + self.iters_up_rest + iters_pull + self.iters_grip_rest
-            if self._intermediary_frames and (i < max_iteration_for_interm_frame) and (i % (self._skip_frames+1) == 0):
-                logger.debug(f"iteration {i}")
-                inter_obs.append(self.state) # TODO: render all frames in one blender session
+            if not initialize and self._intermediary_frames and i % 10 == 0:
+                inter_obs.append(self.state)
 
             if not initialize:
                 self.num_sim_steps += 1
@@ -521,7 +498,7 @@ class ClothEnv(gym.Env):
             return
 
         self.num_steps += 1
-        curr_state = self.state
+        curr_state = self.state_img([self.state])[0]
         rew  = self._reward(action, exit_early, curr_state)
         term = self._terminal()
         self.logger.info("Reward: {:.4f}. Terminal: {}".format(rew, term))
@@ -539,7 +516,7 @@ class ClothEnv(gym.Env):
 
         if self._intermediary_frames: # return video of the action
             # Todo: think if blender rending is faster than .state or not, and why.
-            return inter_obs, curr_state, rew, term, info # keeping inter_obs and curr_state separate as skip frames may lead to incoherent time delta
+            return self.state_img(inter_obs), curr_state, rew, term, info # keeping inter_obs and curr_state separate as skip frames may lead to incoherent time delta
         else:
             return curr_state, rew, term, info
 
@@ -838,7 +815,7 @@ class ClothEnv(gym.Env):
         self._start_coverage = self._prev_reward
         self._start_variance_inv = self._compute_variance()
 
-        obs = self.state
+        obs = self.state_img([self.state])[0]
         return obs
 
     def _reset_actions(self):

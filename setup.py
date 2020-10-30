@@ -47,7 +47,7 @@ setup(
     version='0.0.1',
     description='Basic cloth simulator for reinforcement learning',
     author='Ryan Hoque, Daniel Seita',
-    packages=['gym_cloth', 'gym_cloth.envs', 'gym_cloth.blender', 'gym_cloth.physics', 'vismpc', 'vismpc.vae', 'vismpc.dqn'],
+    packages=['gym_cloth', 'gym_cloth.envs', 'gym_cloth.blender', 'analysis', 'gym_cloth.physics', 'vismpc', 'vismpc.vae', 'vismpc.dqn'],
     package_data={'gym_cloth': ['blender/*.obj']},
     ext_modules=cythonize(ext_modules),
     zip_safe=False,
