@@ -63,7 +63,7 @@ env:
 # ------------------------------------------------------------------------------
 
 init:
-    type: 'tier0'               # Options: tier0, tier1, tier2, tier3
+    type: 'tier1'               # Options: tier0, tier1, tier2, tier3
     debug_matplotlib: False     # If we show matplotlib video of the initialization
     render_opengl: False        # If we show opengl rendering
 

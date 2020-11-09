@@ -70,6 +70,146 @@ class Policy(object):
         return (x, y, cx, cy, dx, dy, dist)
 
 
+class OracleCornerPolicy(Policy):
+
+    def __init__(self):
+        """Oracle corner based policy, cheating as we know the position of points.
+        Note the targets, expressed as (x,y):
+          upper right: (1,1)
+          lower right: (1,0)
+          lower left:  (0,0)
+          upper left:  (0,1)
+        The order in which we pull is important, though!  Choose the method to
+        be rotation or distance-based. The latter seems to be more reasonable:
+        pick the corner that is furthest from its target.
+        Use `np.arctan2(deltay,deltax)` for angle in [-pi,pi] if we use angles.
+        Be careful about the action parameterization and if we clip or not.  If
+        clipping, we have to convert the x and y to each be in [0,1].
+        For tier2 we may have different corner targets for a given point index.
+        """
+        super().__init__()
+        #self._method = 'rotation'
+        self._method = 'distance'
+
+    def get_action(self, obs, t):
+        """Analytic oracle corner policy.
+        """
+        if self.cfg['env']['delta_actions']:
+            return self._corners_delta(t)
+        else:
+            return self._corners_nodelta(t)
+
+    def _corners_delta(self, t):
+        """Corner-based policy, assuming delta actions.
+        """
+        pts = self.env.cloth.pts
+        assert len(pts) == 625, len(pts)
+        cloth = self.env.cloth
+        if self.cfg['init']['type'] == 'tier2' and (not cloth.init_side):
+            self._ll = 576  # actual corner: 600
+            self._ul = 598  # actual corner: 624
+            self._lr = 26   # actual corner: 0
+            self._ur = 48   # actual corner: 24
+            print('NOTE! Flip the corner indices due to init side, tier 2')
+            print(self._ll, self._ul, self._lr, self._ur)
+        else:
+            self._ll = 26   # actual corner: 0
+            self._ul = 48   # actual corner: 24
+            self._lr = 576  # actual corner: 600
+            self._ur = 598  # actual corner: 624
+            print('Corners are at the usual indices.')
+            print(self._ll, self._ul, self._lr, self._ur)
+        x0, y0, cx0, cy0, dx0, dy0, dist0 = self._data_delta(pts[self._ur], targx=1, targy=1)
+        x1, y1, cx1, cy1, dx1, dy1, dist1 = self._data_delta(pts[self._lr], targx=1, targy=0)
+        x2, y2, cx2, cy2, dx2, dy2, dist2 = self._data_delta(pts[self._ll], targx=0, targy=0)
+        x3, y3, cx3, cy3, dx3, dy3, dist3 = self._data_delta(pts[self._ul], targx=0, targy=1)
+        maxdist = max([dist0, dist1, dist2, dist3])
+
+        if self._method == 'rotation':
+            # Rotate through the corners.
+            if t % 4 == 0:
+                x, y, cx, cy, dx, dy = x0, y0, cx0, cy0, dx0, dy0
+            elif t % 4 == 1:
+                x, y, cx, cy, dx, dy = x1, y1, cx1, cy1, dx1, dy1
+            elif t % 4 == 2:
+                x, y, cx, cy, dx, dy = x2, y2, cx2, cy2, dx2, dy2
+            elif t % 4 == 3:
+                x, y, cx, cy, dx, dy = x3, y3, cx3, cy3, dx3, dy3
+        elif self._method == 'distance':
+            # Pick cloth corner furthest from the target.
+            if dist0 == maxdist:
+                x, y, cx, cy, dx, dy = x0, y0, cx0, cy0, dx0, dy0
+            elif dist1 == maxdist:
+                x, y, cx, cy, dx, dy = x1, y1, cx1, cy1, dx1, dy1
+            elif dist2 == maxdist:
+                x, y, cx, cy, dx, dy = x2, y2, cx2, cy2, dx2, dy2
+            elif dist3 == maxdist:
+                x, y, cx, cy, dx, dy = x3, y3, cx3, cy3, dx3, dy3
+        else:
+            raise ValueError(self._method)
+
+        if self.cfg['env']['clip_act_space']:
+            action = (cx, cy, dx, dy)
+        else:
+            action = (x, y, dx, dy)
+        return action
+
+    def _corners_nodelta(self, t):
+        print('Warning! Are you sure you want the no-delta actions?')
+        print('We normally do not use this due to pi and -pi angles')
+
+        def _get_data(pt, targx, targy):
+            x, y = pt.x, pt.y
+            cx = (x - 0.5) * 2.0
+            cy = (y - 0.5) * 2.0
+            a = np.arctan2(targy-y, targx-x)
+            l = np.sqrt( (x-targx)**2 + (y-targy)**2 )
+            return (x, y, cx, cy, l, a)
+
+        pts = self.env.cloth.pts
+        x0, y0, cx0, cy0, l0, a0 = _get_data(pts[-1], targx=1, targy=1)
+        x1, y1, cx1, cy1, l1, a1 = _get_data(pts[-25], targx=1, targy=0)
+        x2, y2, cx2, cy2, l2, a2 = _get_data(pts[0], targx=0, targy=0)
+        x3, y3, cx3, cy3, l3, a3 = _get_data(pts[24], targx=0, targy=1)
+        maxdist = max([l0, l1, l2, l3])
+
+        if self._method == 'rotation':
+            # Rotate through the corners.
+            if t % 4 == 0:
+                x, y, cx, cy, l, a = x0, y0, cx0, cy0, l0, a0
+            elif t % 4 == 1:
+                x, y, cx, cy, l, a = x1, y1, cx1, cy1, l1, a1
+            elif t % 4 == 2:
+                x, y, cx, cy, l, a = x2, y2, cx2, cy2, l2, a2
+            elif t % 4 == 3:
+                x, y, cx, cy, l, a = x3, y3, cx3, cy3, l3, a3
+        elif self._method == 'distance':
+            # Pick cloth corner furthest from the target.
+            if dist0 == maxdist:
+                x, y, cx, cy, dx, dy = x0, y0, cx0, cy0, dx0, dy0
+            elif dist1 == maxdist:
+                x, y, cx, cy, dx, dy = x1, y1, cx1, cy1, dx1, dy1
+            elif dist2 == maxdist:
+                x, y, cx, cy, dx, dy = x2, y2, cx2, cy2, dx2, dy2
+            elif dist3 == maxdist:
+                x, y, cx, cy, dx, dy = x3, y3, cx3, cy3, dx3, dy3
+        else:
+            raise ValueError(self._method)
+
+        # Apply scaling factor to length if needed, since for non-delta actions,
+        # length is just the fraction of the maximum number of pulls, which is
+        # itself a tuned quantity. Not the same reasoning as the scaling I use
+        # for delta actions, but has same effect of reducing pull length.
+        l = l * 1.0
+
+        action = (x, y, l, a)
+        if self.cfg['env']['clip_act_space']:
+            action = (cx, cy, (l-0.5)*2, a/np.pi)
+        else:
+            action = (x, y, l, a)
+        return action
+
+
 class RandomPolicy(Policy):
     def __init__(self):
         """Two possible types of random policies, pick one.
@@ -230,6 +370,8 @@ if __name__ == "__main__":
         policy = RandomPolicy()
     elif args.policy == "video_random":
         policy = RandomVideoPolicy()
+    elif args.policy == 'oracle':
+        policy = OracleCornerPolicy()
     else:
         raise ValueError(args.policy)
 

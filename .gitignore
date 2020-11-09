@@ -27,3 +27,4 @@ render/
 *.pkl
 *.obj
 *.png
+.ipynb_checkpoints/
